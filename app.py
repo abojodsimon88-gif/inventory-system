@@ -1,16 +1,19 @@
 from flask import Flask, render_template_string, request, redirect, url_for, session
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
-app.secret_key = 'tyre_shop_auto_2026'
+app.secret_key = 'tyre_shop_secure_2026'
+
+# جعل الجلسة تنتهي بمجرد إغلاق المتصفح لضمان طلب كلمة السر دائماً
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=30)
 
 USERS = {
     'admin': '0000'
 }
 
-# المخزون يبدأ فارغاً ونظيفاً تماماً
 INVENTORY = {}
 DAILY_LOG = []
+WORK_LOG = []  # سجل الشغل اليومي (قديش اشتغلت اليوم)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -69,9 +72,23 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="section-container">
-                <!-- قسم تسجيل الحركة التلقائية السريعة (بيع أو توريد) -->
+                <!-- قسم تسجيل الشغل اليومي (قديش اشتغلت اليوم) -->
+                <div class="card" style="border-right: 5px solid #e67e22;">
+                    <h3 style="margin-top:0;">💵 تسجيل الشغل اليومي (أجرة اليد / الخدمات)</h3>
+                    <form method="POST" action="/add_work">
+                        <label>تفاصيل الشغل (مثلاً: تركيب كوشوك، ترصيص، بنشر...):</label>
+                        <input type="text" name="work_desc" required placeholder="اكتب وصف الشغل هنا...">
+
+                        <label>المبلغ (بالشيكل):</label>
+                        <input type="number" step="0.01" name="work_amount" required placeholder="0.00">
+
+                        <button type="submit" class="btn" style="background: #e67e22;">تسجيل شغل اليوم</button>
+                    </form>
+                </div>
+
+                <!-- قسم حركة المخزون التلقائية السريعة -->
                 <div class="card" style="border-right: 5px solid #3498db;">
-                    <h3 style="margin-top:0;">⚡ حركة سريعة تلقائية (بيع / شراء)</h3>
+                    <h3 style="margin-top:0;">⚡ حركة المخزون التلقائية (بيع / شراء)</h3>
                     <form method="POST" action="/daily_transaction">
                         <label>نوع العملية:</label>
                         <select name="action_type">
@@ -118,8 +135,27 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
+            <!-- جدول سجل الشغل اليومي -->
+            <h2>📋 سجل الشغل اليومي (أجرة اليد والخدمات)</h2>
+            <table>
+                <tr>
+                    <th>الوقت</th>
+                    <th>تفاصيل العمل</th>
+                    <th>المبلغ</th>
+                </tr>
+                {% for work in work_log %}
+                    <tr>
+                        <td>{{ work.time }}</td>
+                        <td>{{ work.desc }}</td>
+                        <td><strong style="color: #27ae60;">{{ work.amount }} شيكل</strong></td>
+                    </tr>
+                {% else %}
+                    <tr><td colspan="3">لم يتم تسجيل أي شغل اليوم حتى الآن.</td></tr>
+                {% endfor %}
+            </table>
+
             <!-- جدول المخزون الكلي -->
-            <h2>📦 المخزون الكلي للمحل</h2>
+            <h2 style="margin-top: 25px;">📦 المخزون الكلي للمحل</h2>
             <table>
                 <tr>
                     <th>الصنف</th>
@@ -144,8 +180,8 @@ HTML_TEMPLATE = """
                 {% endfor %}
             </table>
 
-            <!-- سجل الحركات اليومية المفصل (إيش اشتغلت اليوم) -->
-            <h2 style="margin-top: 25px;">📊 سجل الحركات اليومية (إيش اشتغلت اليوم)</h2>
+            <!-- سجل حركات المخزون -->
+            <h2 style="margin-top: 25px;">📊 سجل حركات المخزون</h2>
             <table>
                 <tr>
                     <th>الوقت</th>
@@ -169,7 +205,7 @@ HTML_TEMPLATE = """
                         <td>{{ log.effect }}</td>
                     </tr>
                 {% else %}
-                    <tr><td colspan="5">لم يتم تسجيل أي حركات اليوم حتى الآن.</td></tr>
+                    <tr><td colspan="5">لم يتم تسجيل أي حركات مخزون اليوم.</td></tr>
                 {% endfor %}
             </table>
 
@@ -211,6 +247,7 @@ def index():
     return render_template_string(HTML_TEMPLATE, 
                                   inventory=INVENTORY, 
                                   daily_log=DAILY_LOG,
+                                  work_log=WORK_LOG,
                                   error=request.args.get('error'),
                                   success=request.args.get('success'))
 
@@ -219,6 +256,7 @@ def login():
     username = request.form.get('username')
     password = request.form.get('password')
     if username in USERS and USERS[username] == password:
+        session.permanent = True
         session['user'] = username
         return redirect(url_for('index'))
     else:
@@ -236,6 +274,24 @@ def change_password():
 @app.route('/logout')
 def logout():
     session.pop('user', None)
+    return redirect(url_for('index'))
+
+@app.route('/add_work', methods=['POST'])
+def add_work():
+    if session.get('user'):
+        work_desc = request.form.get('work_desc').strip()
+        try:
+            work_amount = float(request.form.get('work_amount'))
+            current_time = datetime.now().strftime('%H:%M:%S')
+            
+            WORK_LOG.insert(0, {
+                'time': current_time,
+                'desc': work_desc,
+                'amount': work_amount
+            })
+            return redirect(url_for('index', success='تم تسجيل الشغل اليومي بنجاح!'))
+        except ValueError:
+            return redirect(url_for('index', error='الرجاء إدخال مبلغ صحيح.'))
     return redirect(url_for('index'))
 
 @app.route('/save_item', methods=['POST'])
@@ -273,7 +329,6 @@ def daily_transaction():
         item_name = request.form.get('item_name')
         new_item_name = request.form.get('new_item_name').strip()
         
-        # التعامل مع الأصناف الجديدة تلقائياً عند التوريد
         if new_item_name and 'شراء' in action_type:
             item_name = new_item_name
             if item_name not in INVENTORY:
@@ -287,18 +342,16 @@ def daily_transaction():
         if item_name in INVENTORY:
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            # التحديث التلقائي للمخزون (نقصان أو زيادة تلقائية بناء على العملية)
             if 'بيع' in action_type:
                 if INVENTORY[item_name]['qty'] >= quantity:
-                    INVENTORY[item_name]['qty'] -= quantity  # ينقص تلقائياً
+                    INVENTORY[item_name]['qty'] -= quantity
                     effect = f"تم خصم {quantity} قطعة تلقائياً"
                 else:
                     return redirect(url_for('index', error='الكمية المباعة أكبر من المتوفر بالمخزون الحالي!'))
             else:
-                INVENTORY[item_name]['qty'] += quantity  # يزيد تلقائياً
+                INVENTORY[item_name]['qty'] += quantity
                 effect = f"تم إضافة {quantity} قطعة تلقائياً"
             
-            # تسجيل الحركة في سجل اليومية المفصل
             DAILY_LOG.insert(0, {
                 'time': current_time,
                 'type': action_type,
