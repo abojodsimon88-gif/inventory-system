@@ -1,13 +1,14 @@
 from flask import Flask, render_template_string, request, redirect, url_for, session
+from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = 'tyre_shop_clean_2026'
+app.secret_key = 'tyre_shop_auto_2026'
 
 USERS = {
     'admin': '0000'
 }
 
-# المخزون يبدأ فارغاً تماماً كما طلبت بدون أي أصناف مسبقة
+# المخزون يبدأ فارغاً ونظيفاً تماماً
 INVENTORY = {}
 DAILY_LOG = []
 
@@ -68,14 +69,14 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="section-container">
-                <!-- قسم تسجيل الحركة السريعة -->
+                <!-- قسم تسجيل الحركة التلقائية السريعة (بيع أو توريد) -->
                 <div class="card" style="border-right: 5px solid #3498db;">
-                    <h3 style="margin-top:0;">⚡ حركة سريعة (بيع أو شراء)</h3>
+                    <h3 style="margin-top:0;">⚡ حركة سريعة تلقائية (بيع / شراء)</h3>
                     <form method="POST" action="/daily_transaction">
-                        <label>نوع الحركة:</label>
+                        <label>نوع العملية:</label>
                         <select name="action_type">
-                            <option value="بيع">بيع (ينقص من المخزون)</option>
-                            <option value="شراء">شراء / توريد (يزيد المخزون)</option>
+                            <option value="بيع (إخراج من المخزون)">📉 بيع (ينقص المخزون تلقائياً)</option>
+                            <option value="شراء (توريد للمخزون)">📈 شراء / توريد (يزيد المخزون تلقائياً)</option>
                         </select>
 
                         <label>اختر الصنف المتوفر:</label>
@@ -86,13 +87,13 @@ HTML_TEMPLATE = """
                             {% endfor %}
                         </select>
 
-                        <label>أو اكتب اسم صنف جديد (عند الشراء):</label>
+                        <label>أو اكتب اسم صنف جديد (عند التوريد/الشراء):</label>
                         <input type="text" name="new_item_name" placeholder="اكتب اسم الصنف الجديد هنا...">
 
                         <label>الكمية:</label>
                         <input type="number" name="quantity" min="1" required placeholder="الكمية">
 
-                        <button type="submit" class="btn">تنفيذ الحركة وتحديث المخزون</button>
+                        <button type="submit" class="btn">تنفيذ وتحديث المخزون تلقائياً</button>
                     </form>
                 </div>
 
@@ -122,7 +123,7 @@ HTML_TEMPLATE = """
             <table>
                 <tr>
                     <th>الصنف</th>
-                    <th>الكمية</th>
+                    <th>الكمية المتوفرة</th>
                     <th>شراء</th>
                     <th>بيع</th>
                     <th>إجراءات</th>
@@ -143,19 +144,21 @@ HTML_TEMPLATE = """
                 {% endfor %}
             </table>
 
-            <!-- سجل الحركات اليومية -->
-            <h2 style="margin-top: 25px;">📊 سجل الحركات اليومية</h2>
+            <!-- سجل الحركات اليومية المفصل (إيش اشتغلت اليوم) -->
+            <h2 style="margin-top: 25px;">📊 سجل الحركات اليومية (إيش اشتغلت اليوم)</h2>
             <table>
                 <tr>
-                    <th>الحركة</th>
+                    <th>الوقت</th>
+                    <th>نوع الحركة</th>
                     <th>الصنف</th>
                     <th>الكمية</th>
-                    <th>التأثير</th>
+                    <th>التأثير التلقائي</th>
                 </tr>
                 {% for log in daily_log %}
                     <tr>
+                        <td>{{ log.time }}</td>
                         <td>
-                            {% if log.type == 'بيع' %}
+                            {% if 'بيع' in log.type %}
                                 <span style="color: #e74c3c; font-weight: bold;">{{ log.type }}</span>
                             {% else %}
                                 <span style="color: #27ae60; font-weight: bold;">{{ log.type }}</span>
@@ -166,7 +169,7 @@ HTML_TEMPLATE = """
                         <td>{{ log.effect }}</td>
                     </tr>
                 {% else %}
-                    <tr><td colspan="4">لم يتم تسجيل أي حركات اليوم.</td></tr>
+                    <tr><td colspan="5">لم يتم تسجيل أي حركات اليوم حتى الآن.</td></tr>
                 {% endfor %}
             </table>
 
@@ -270,7 +273,8 @@ def daily_transaction():
         item_name = request.form.get('item_name')
         new_item_name = request.form.get('new_item_name').strip()
         
-        if new_item_name and action_type == 'شراء':
+        # التعامل مع الأصناف الجديدة تلقائياً عند التوريد
+        if new_item_name and 'شراء' in action_type:
             item_name = new_item_name
             if item_name not in INVENTORY:
                 INVENTORY[item_name] = {'qty': 0, 'buy_price': 0, 'sell_price': 0}
@@ -281,25 +285,30 @@ def daily_transaction():
             return redirect(url_for('index', error='الكمية يجب أن تكون رقماً صحيحاً.'))
         
         if item_name in INVENTORY:
-            if action_type == 'بيع':
-                if INVENTORY[item_name]['qty'] >= quantity:
-                    INVENTORY[item_name]['qty'] -= quantity
-                    effect = f"تم خصم {quantity} قطعة"
-                else:
-                    return redirect(url_for('index', error='الكمية المطلوبة للبيع أكبر من المتوفر بالمخزون!'))
-            elif action_type == 'شراء':
-                INVENTORY[item_name]['qty'] += quantity
-                effect = f"تم إضافة {quantity} قطعة"
+            current_time = datetime.now().strftime('%H:%M:%S')
             
+            # التحديث التلقائي للمخزون (نقصان أو زيادة تلقائية بناء على العملية)
+            if 'بيع' in action_type:
+                if INVENTORY[item_name]['qty'] >= quantity:
+                    INVENTORY[item_name]['qty'] -= quantity  # ينقص تلقائياً
+                    effect = f"تم خصم {quantity} قطعة تلقائياً"
+                else:
+                    return redirect(url_for('index', error='الكمية المباعة أكبر من المتوفر بالمخزون الحالي!'))
+            else:
+                INVENTORY[item_name]['qty'] += quantity  # يزيد تلقائياً
+                effect = f"تم إضافة {quantity} قطعة تلقائياً"
+            
+            # تسجيل الحركة في سجل اليومية المفصل
             DAILY_LOG.insert(0, {
+                'time': current_time,
                 'type': action_type,
                 'item': item_name,
                 'qty': quantity,
                 'effect': effect
             })
-            return redirect(url_for('index', success='تمت الحركة وتحديث المخزون بنجاح!'))
+            return redirect(url_for('index', success='تمت الحركة وتحديث المخزون تلقائياً بنجاح!'))
         else:
-            return redirect(url_for('index', error='الرجاء اختيار صنف صحيح أو إدخال صنف جديد للشراء.'))
+            return redirect(url_for('index', error='الرجاء اختيار صنف صحيح أو إدخال صنف جديد للتوريد.'))
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
