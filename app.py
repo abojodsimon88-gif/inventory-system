@@ -1,51 +1,43 @@
 from flask import Flask, render_template_string, request, redirect, url_for, session
 
 app = Flask(__name__)
-app.secret_key = 'tyre_shop_secret_2026'
+app.secret_key = 'tyre_shop_clean_2026'
 
-# --- بيانات المستخدمين وكلمة السر ---
 USERS = {
-    'admin': '0000' # اسم المستخدم الافتراضي وكلمة السر
+    'admin': '0000'
 }
 
-# --- قاعدة بيانات مؤقتة للمخزون (اسم البضاعة -> الكمية، سعر الشراء، سعر البيع) ---
-INVENTORY = {
-    'كوشوك هانكوك 16': {'qty': 40, 'buy_price': 220, 'sell_price': 260},
-    'كوشوك كومهو 15': {'qty': 25, 'buy_price': 180, 'sell_price': 210},
-    'ترصيص وتجليد': {'qty': 100, 'buy_price': 5, 'sell_price': 15}
-}
-
-# --- سجل الشغل اليومي (بيع وشراء) ---
+# المخزون يبدأ فارغاً تماماً كما طلبت بدون أي أصناف مسبقة
+INVENTORY = {}
 DAILY_LOG = []
 
-# --- الواجهة البرمجية (HTML) ---
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ar" dir="rtl">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>نظام إدارة مخزون البناشر والشغل اليومي</title>
+    <title>نظام إدارة مخزون البناشر الذكي</title>
     <style>
-        body { font-family: Tahoma, sans-serif; background-color: #f0f2f5; margin: 0; padding: 20px; color: #333; }
-        .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-        h1, h2, h3 { color: #2c3e50; text-align: center; }
-        .btn { display: inline-block; background: #3498db; color: white; padding: 8px 15px; text-decoration: none; border-radius: 5px; margin: 3px; border: none; cursor: pointer; }
+        body { font-family: Tahoma, sans-serif; background-color: #f0f2f5; margin: 0; padding: 15px; color: #333; }
+        .container { max-width: 1000px; margin: auto; background: white; padding: 15px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+        h1, h2, h3 { color: #2c3e50; text-align: center; font-size: 22px; }
+        .btn { display: inline-block; background: #3498db; color: white; padding: 10px 15px; text-decoration: none; border-radius: 5px; margin: 5px 0; border: none; cursor: pointer; width: 100%%; text-align: center; font-size: 16px; box-sizing: border-box; }
         .btn:hover { background: #2980b9; }
-        .btn-danger { background: #e74c3c; }
+        .btn-danger { background: #e74c3c; width: auto; padding: 5px 10px; }
         .btn-danger:hover { background: #c0392b; }
         .btn-success { background: #27ae60; }
         .btn-success:hover { background: #219653; }
-        .btn-warning { background: #f39c12; color: white; }
+        .btn-warning { background: #f39c12; color: white; width: auto; padding: 5px 10px; }
         .btn-warning:hover { background: #d68910; }
-        table { width: 100%%; border-collapse: collapse; margin-top: 15px; }
-        th, td { border: 1px solid #ddd; padding: 10px; text-align: center; }
+        table { width: 100%%; border-collapse: collapse; margin-top: 15px; font-size: 14px; overflow-x: auto; display: block; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: center; }
         th { background-color: #2c3e50; color: white; }
-        select, input { width: 100%%; padding: 8px; margin: 5px 0 15px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: Tahoma; }
-        .card { background: #fdfdfd; border: 1px solid #e2e8f0; padding: 15px; border-radius: 6px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
+        select, input { width: 100%%; padding: 10px; margin: 5px 0 15px 0; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-family: Tahoma; font-size: 15px; background: #fff; }
+        .card { background: #fdfdfd; border: 1px solid #e2e8f0; padding: 12px; border-radius: 6px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.02); }
         .error { background: #f8d7da; color: #721c24; padding: 10px; border-radius: 5px; margin-bottom: 15px; text-align: center; }
         .success-msg { background: #d4edda; color: #155724; padding: 10px; border-radius: 5px; margin-bottom: 15px; text-align: center; }
-        .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .section-container { display: flex; flex-direction: column; gap: 15px; }
     </style>
 </head>
 <body>
@@ -53,9 +45,9 @@ HTML_TEMPLATE = """
         <h1>🛞 نظام إدارة مخزون البناشر الذكي</h1>
         
         {% if session.get('user') %}
-            <div style="display: flex; justify-content: space-between; align-items: center; background: #e2e8f0; padding: 10px 15px; border-radius: 5px; margin-bottom: 20px;">
-                <span>مرحباً بك، المستخدم: <strong>{{ session.get('user') }}</strong></span>
-                <a href="/logout" class="btn btn-danger" style="padding: 5px 10px; margin: 0;">تسجيل خروج</a>
+            <div style="display: flex; justify-content: space-between; align-items: center; background: #e2e8f0; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 14px;">
+                <span>المستخدم: <strong>{{ session.get('user') }}</strong></span>
+                <a href="/logout" class="btn btn-danger" style="padding: 5px 10px; margin: 0; font-size: 13px;">تسجيل خروج</a>
             </div>
 
             {% if error %}
@@ -67,103 +59,98 @@ HTML_TEMPLATE = """
 
             <!-- قسم تغيير كلمة السر -->
             <div class="card" style="background: #f8fafc;">
-                <h4>🔐 تغيير كلمة السر الخاصة بك</h4>
-                <form method="POST" action="/change_password" style="display: flex; gap: 10px; align-items: flex-end;">
-                    <div style="flex: 1; margin: 0;">
-                        <label>كلمة السر الجديدة:</label>
-                        <input type="password" name="new_password" required placeholder="أدخل كلمة السر الجديدة">
-                    </div>
-                    <button type="submit" class="btn btn-success" style="height: 38px; margin: 0;">تحديث كلمة السر</button>
+                <h4 style="margin: 0 0 10px 0; font-size: 16px;">🔐 تغيير كلمة السر</h4>
+                <form method="POST" action="/change_password">
+                    <label>كلمة السر الجديدة:</label>
+                    <input type="password" name="new_password" required placeholder="أدخل كلمة السر الجديدة">
+                    <button type="submit" class="btn btn-success">تحديث كلمة السر</button>
                 </form>
             </div>
 
-            <div class="grid-2">
-                <!-- قسم تسجيل الشغل اليومي الذكي (بيع / شراء سريع) -->
+            <div class="section-container">
+                <!-- قسم تسجيل الحركة السريعة -->
                 <div class="card" style="border-right: 5px solid #3498db;">
-                    <h3>⚡ تسجيل حركة سريعة (بيع أو شراء)</h3>
-                    <p style="font-size: 13px; color: #666;">النظام سيقوم بتعديل المخزون تلقائياً بالزيادة أو النقصان!</p>
+                    <h3 style="margin-top:0;">⚡ حركة سريعة (بيع أو شراء)</h3>
                     <form method="POST" action="/daily_transaction">
                         <label>نوع الحركة:</label>
                         <select name="action_type">
-                            <option value="بيع">بيع (ينقص من المخزون تلقائياً)</option>
-                            <option value="شراء">شراء / توريد (يزيد المخزون تلقائياً)</option>
+                            <option value="بيع">بيع (ينقص من المخزون)</option>
+                            <option value="شراء">شراء / توريد (يزيد المخزون)</option>
                         </select>
 
-                        <label>اختر الصنف (أو اكتبه إذا كان شراء صنف جديد):</label>
-                        <select name="item_name" required>
+                        <label>اختر الصنف المتوفر:</label>
+                        <select name="item_name">
+                            <option value="">--- اختر صنفاً من المخزون ---</option>
                             {% for item in inventory.keys() %}
                                 <option value="{{ item }}">{{ item }} (المتوفر: {{ inventory[item].qty }})</option>
                             {% endfor %}
                         </select>
-                        <input type="text" name="new_item_name" placeholder="أو اكتب اسم صنف جديد (في حال الشراء)..." style="margin-top: -10px;">
+
+                        <label>أو اكتب اسم صنف جديد (عند الشراء):</label>
+                        <input type="text" name="new_item_name" placeholder="اكتب اسم الصنف الجديد هنا...">
 
                         <label>الكمية:</label>
                         <input type="number" name="quantity" min="1" required placeholder="الكمية">
 
-                        <button type="submit" class="btn" style="width: 100%;">تنفيذ الحركة وتحديث المخزون فورا</button>
+                        <button type="submit" class="btn">تنفيذ الحركة وتحديث المخزون</button>
                     </form>
                 </div>
 
-                <!-- قسم إضافة صنف جديد أو تعديل صنف بالمخزون الكلي -->
+                <!-- قسم إدارة وإضافة صنف جديد / تعديل صنف -->
                 <div class="card" style="border-right: 5px solid #27ae60;">
-                    <h3>➕ إدارة وتعديل المخزون الكلي</h3>
+                    <h3 style="margin-top:0;">➕ إضافة أو تعديل صنف بالمخزون</h3>
                     <form method="POST" action="/save_item">
                         <label>اسم الصنف:</label>
-                        <input type="text" name="item_name" required placeholder="اسم الصنف المراد إضافته أو تعديله">
+                        <input type="text" name="item_name" required placeholder="اسم الصنف">
 
                         <label>الكمية الكلية:</label>
                         <input type="number" name="qty" required placeholder="الكمية">
 
-                        <div style="display: flex; gap: 10px;">
-                            <div style="flex: 1;">
-                                <label>سعر الشراء:</label>
-                                <input type="number" step="0.01" name="buy_price" required placeholder="0.00">
-                            </div>
-                            <div style="flex: 1;">
-                                <label>سعر البيع:</label>
-                                <input type="number" step="0.01" name="sell_price" required placeholder="0.00">
-                            </div>
-                        </div>
+                        <label>سعر الشراء:</label>
+                        <input type="number" step="0.01" name="buy_price" required placeholder="0.00">
 
-                        <button type="submit" class="btn btn-success" style="width: 100%;">حفظ / تعديل الصنف</button>
+                        <label>سعر البيع:</label>
+                        <input type="number" step="0.01" name="sell_price" required placeholder="0.00">
+
+                        <button type="submit" class="btn btn-success">حفظ أو تعديل الصنف</button>
                     </form>
                 </div>
             </div>
 
-            <!-- عرض المخزون الكلي للمحل مع زر تعديل مباشر -->
+            <!-- جدول المخزون الكلي -->
             <h2>📦 المخزون الكلي للمحل</h2>
             <table>
                 <tr>
-                    <th>اسم الصنف / البضاعة</th>
-                    <th>الكمية المتوفرة</th>
-                    <th>سعر الشراء</th>
-                    <th>سعر البيع</th>
+                    <th>الصنف</th>
+                    <th>الكمية</th>
+                    <th>شراء</th>
+                    <th>بيع</th>
                     <th>إجراءات</th>
                 </tr>
                 {% for item, data in inventory.items() %}
                     <tr>
                         <td><strong>{{ item }}</strong></td>
-                        <td><span style="background: #e2e8f0; padding: 3px 8px; border-radius: 4px; font-weight: bold;">{{ data.qty }}</span></td>
+                        <td>{{ data.qty }}</td>
                         <td>{{ data.buy_price }}</td>
                         <td>{{ data.sell_price }}</td>
                         <td>
-                            <button onclick="editItem('{{ item }}', '{{ data.qty }}', '{{ data.buy_price }}', '{{ data.sell_price }}')" class="btn btn-warning" style="padding: 3px 8px; font-size: 13px;">تعديل</button>
-                            <a href="/delete_item?item={{ item }}" class="btn btn-danger" style="padding: 3px 8px; font-size: 13px;" onclick="return confirm('متأكد بدك تحذف هذا الصنف؟')">حذف</a>
+                            <button onclick="editItem('{{ item }}', '{{ data.qty }}', '{{ data.buy_price }}', '{{ data.sell_price }}')" class="btn btn-warning">تعديل</button>
+                            <a href="/delete_item?item={{ item }}" class="btn btn-danger" onclick="return confirm('متأكد بدك تحذف هذا الصنف؟')">حذف</a>
                         </td>
                     </tr>
                 {% else %}
-                    <tr><td colspan="5">لا توجد أصناف مخزنة حالياً.</td></tr>
+                    <tr><td colspan="5">لا توجد أصناف مخزنة حالياً. ابدأ بإضافة أصناف جديدة.</td></tr>
                 {% endfor %}
             </table>
 
-            <!-- سجل الشغل اليومي -->
-            <h2 style="margin-top: 30px;">📊 سجل الحركات اليومية (بيع وشراء)</h2>
+            <!-- سجل الحركات اليومية -->
+            <h2 style="margin-top: 25px;">📊 سجل الحركات اليومية</h2>
             <table>
                 <tr>
-                    <th>نوع الحركة</th>
+                    <th>الحركة</th>
                     <th>الصنف</th>
                     <th>الكمية</th>
-                    <th>التأثير على المخزون</th>
+                    <th>التأثير</th>
                 </tr>
                 {% for log in daily_log %}
                     <tr>
@@ -185,19 +172,19 @@ HTML_TEMPLATE = """
 
         {% else %}
             <!-- صفحة تسجيل الدخول -->
-            <div class="card" style="max-width: 400px; margin: 40px auto; text-align: center;">
-                <h2>تسجيل الدخول للنظام</h2>
+            <div class="card" style="max-width: 350px; margin: 30px auto; text-align: center;">
+                <h2>تسجيل الدخول</h2>
                 {% if error %}
                     <div class="error">{{ error }}</div>
                 {% endif %}
                 <form method="POST" action="/login">
                     <label>اسم المستخدم:</label>
-                    <input type="text" name="username" required placeholder="أدخل اسم المستخدم (admin)">
+                    <input type="text" name="username" required placeholder="admin">
 
-                    <label>كلمة السر (الافتراضية: 0000):</label>
-                    <input type="password" name="password" required placeholder="أدخل كلمة السر">
+                    <label>كلمة السر (0000):</label>
+                    <input type="password" name="password" required placeholder="كلمة السر">
 
-                    <button type="submit" class="btn" style="width: 100%;">دخول للنظام</button>
+                    <button type="submit" class="btn" style="width: 100%;">دخول</button>
                 </form>
             </div>
         {% endif %}
@@ -228,22 +215,20 @@ def index():
 def login():
     username = request.form.get('username')
     password = request.form.get('password')
-    
     if username in USERS and USERS[username] == password:
         session['user'] = username
         return redirect(url_for('index'))
     else:
-        return redirect(url_for('index', error='اسم المستخدم أو كلمة السر غير صحيحة! (الافتراضي: admin / 0000)'))
+        return redirect(url_for('index', error='خطأ في اسم المستخدم أو كلمة السر!'))
 
 @app.route('/change_password', methods=['POST'])
 def change_password():
     if session.get('user'):
         new_pass = request.form.get('new_password')
         if new_pass:
-            user = session.get('user')
-            USERS[user] = new_pass
+            USERS[session['user']] = new_pass
             return redirect(url_for('index', success='تم تحديث كلمة السر بنجاح!'))
-    return redirect(url_for('index', error='حدث خطأ أثناء تغيير كلمة السر'))
+    return redirect(url_for('index', error='حدث خطأ أثناء التحديث'))
 
 @app.route('/logout')
 def logout():
@@ -264,7 +249,7 @@ def save_item():
                 'buy_price': buy_price,
                 'sell_price': sell_price
             }
-            return redirect(url_for('index', success=f'تم حفظ الصنف ({item_name}) وتحديث المخزون بنجاح!'))
+            return redirect(url_for('index', success=f'تم حفظ الصنف ({item_name}) بنجاح!'))
         except ValueError:
             return redirect(url_for('index', error='الرجاء إدخال أرقام صحيحة للكمية والأسعار.'))
     return redirect(url_for('index'))
@@ -275,7 +260,7 @@ def delete_item():
         item = request.args.get('item')
         if item in INVENTORY:
             del INVENTORY[item]
-            return redirect(url_for('index', success=f'تم حذف الصنف ({item}) من المخزون بنجاح!'))
+            return redirect(url_for('index', success=f'تم حذف الصنف ({item}) بنجاح!'))
     return redirect(url_for('index'))
 
 @app.route('/daily_transaction', methods=['POST'])
@@ -285,11 +270,9 @@ def daily_transaction():
         item_name = request.form.get('item_name')
         new_item_name = request.form.get('new_item_name').strip()
         
-        # لو كتب صنف جديد في حالة الشراء
         if new_item_name and action_type == 'شراء':
             item_name = new_item_name
             if item_name not in INVENTORY:
-                # افتراض أسعار مبدئية لو الصنف جديد تماماً ويمكنه تعديلها لاحقاً
                 INVENTORY[item_name] = {'qty': 0, 'buy_price': 0, 'sell_price': 0}
 
         try:
@@ -301,12 +284,12 @@ def daily_transaction():
             if action_type == 'بيع':
                 if INVENTORY[item_name]['qty'] >= quantity:
                     INVENTORY[item_name]['qty'] -= quantity
-                    effect = f"تم خصم {quantity} قطعة من المخزون"
+                    effect = f"تم خصم {quantity} قطعة"
                 else:
-                    return redirect(url_for('index', error='الكمية المطلوبة للبيع أكبر من المتوفر في المخزون!'))
+                    return redirect(url_for('index', error='الكمية المطلوبة للبيع أكبر من المتوفر بالمخزون!'))
             elif action_type == 'شراء':
                 INVENTORY[item_name]['qty'] += quantity
-                effect = f"تم إضافة {quantity} قطعة للمخزون"
+                effect = f"تم إضافة {quantity} قطعة"
             
             DAILY_LOG.insert(0, {
                 'type': action_type,
@@ -314,9 +297,9 @@ def daily_transaction():
                 'qty': quantity,
                 'effect': effect
             })
-            return redirect(url_for('index', success='تمت العملية وتحديث المخزون تلقائياً بنجاح!'))
+            return redirect(url_for('index', success='تمت الحركة وتحديث المخزون بنجاح!'))
         else:
-            return redirect(url_for('index', error='الصنف غير موجود بالمخزون!'))
+            return redirect(url_for('index', error='الرجاء اختيار صنف صحيح أو إدخال صنف جديد للشراء.'))
     return redirect(url_for('index'))
 
 if __name__ == '__main__':
