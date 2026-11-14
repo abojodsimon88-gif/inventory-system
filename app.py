@@ -130,9 +130,15 @@ def init_db():
         "name VARCHAR(150) NOT NULL PRIMARY KEY,"
         "qty INT NOT NULL DEFAULT 0,"
         "buy_price DECIMAL(10,2) NOT NULL DEFAULT 0,"
-        "sell_price DECIMAL(10,2) NOT NULL DEFAULT 0"
+        "sell_price DECIMAL(10,2) NOT NULL DEFAULT 0,"
+        "seq BIGINT NOT NULL AUTO_INCREMENT,"
+        "UNIQUE KEY uq_tyre_items_seq (seq)"
         ") " + tail
     )
+    # ترقية الجدول القديم: عمود ترتيب الإضافة (الصنف الجديد يظهر في آخر القائمة)
+    if _run("SHOW COLUMNS FROM tyre_items LIKE %s", ('seq',), fetch="one") is None:
+        _run("ALTER TABLE tyre_items ADD COLUMN seq BIGINT NOT NULL AUTO_INCREMENT, "
+             "ADD UNIQUE KEY uq_tyre_items_seq (seq)")
 
     row = _run("SELECT user_key FROM tyre_users WHERE user_key = %s", (USER_KEY,), fetch="one")
     if row is None:
@@ -176,16 +182,34 @@ def db_set_password(user_key, new_hash):
 
 
 def db_list_items():
-    return _run("SELECT name, qty, buy_price, sell_price FROM tyre_items ORDER BY name", fetch="all")
+    return _run("SELECT name, qty, buy_price, sell_price FROM tyre_items ORDER BY seq", fetch="all")
 
 
 def db_upsert_item(name, qty, buy_price, sell_price):
-    _run(
-        "INSERT INTO tyre_items (name, qty, buy_price, sell_price) VALUES (%s, %s, %s, %s) "
-        "ON DUPLICATE KEY UPDATE qty = VALUES(qty), buy_price = VALUES(buy_price), "
-        "sell_price = VALUES(sell_price)",
-        (name, qty, buy_price, sell_price),
-    )
+    """يضيف صنفاً جديداً أو يحدّث موجوداً. القيمة None = اترك الموجود كما هو (أو صفر للجديد).
+    يرجع 'created' أو 'updated'."""
+    def work(cur):
+        cur.execute(
+            "SELECT qty, buy_price, sell_price FROM tyre_items WHERE name = %s FOR UPDATE", (name,))
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                "INSERT INTO tyre_items (name, qty, buy_price, sell_price) VALUES (%s, %s, %s, %s)",
+                (name,
+                 0 if qty is None else qty,
+                 0 if buy_price is None else buy_price,
+                 0 if sell_price is None else sell_price),
+            )
+            return 'created'
+        cur.execute(
+            "UPDATE tyre_items SET qty = %s, buy_price = %s, sell_price = %s WHERE name = %s",
+            (row['qty'] if qty is None else qty,
+             row['buy_price'] if buy_price is None else buy_price,
+             row['sell_price'] if sell_price is None else sell_price,
+             name),
+        )
+        return 'updated'
+    return _tx(work)
 
 
 def db_delete_item(name):
@@ -365,6 +389,13 @@ input { width: 100%; padding: 11px; margin: 4px 0 12px; border: 1px solid #cbd5e
 .notice.info { background: #fef9c3; color: #854d0e; }
 .muted { color: var(--muted); }
 .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.row3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.price-field { display: none; }
+body.show-prices .price-field { display: block; }
+.searchrow { display: flex; gap: 8px; align-items: stretch; }
+.searchrow .search { flex: 1; min-width: 0; }
+.eye { background: #334155; padding: 0 14px; font-size: 15px; white-space: nowrap; }
+.hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
 .search { font-size: 18px; padding: 14px; margin: 0 0 6px; border: 2px solid #93c5fd; }
 .item { background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 12px 14px; margin-bottom: 10px;
         box-shadow: 0 1px 6px rgba(15,23,42,.05); }
@@ -379,7 +410,7 @@ input { width: 100%; padding: 11px; margin: 4px 0 12px; border: 1px solid #cbd5e
 .auth { max-width: 380px; margin: 30px auto; }
 .logo { display: block; width: 110px; height: 110px; border-radius: 26px; margin: 0 auto 10px; box-shadow: 0 6px 18px rgba(30,58,138,.35); }
 .footer { text-align: center; color: var(--muted); font-size: 12px; margin: 20px 0; }
-@media (max-width: 480px) { .row2 { grid-template-columns: 1fr; } }
+
 '''
 
 PAGE_HEAD = '''<meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -475,9 +506,32 @@ MAIN_HTML = '''
   {% if flash %}<div class="notice {{ 'err' if flash[0] == 'error' else 'ok' }}">{{ flash[1] }}</div>{% endif %}
 
   <div class="card">
-    <input type="search" id="search" class="search" value="{{ q }}" oninput="onSearch()"
-           placeholder="🔍 ابحث عن صنف..." autocomplete="off">
+    <div class="searchrow">
+      <input type="search" id="search" class="search" value="{{ q }}" oninput="onSearch()"
+             placeholder="🔍 ابحث عن صنف..." autocomplete="off">
+      <button type="button" id="eye" class="btn eye" onclick="togglePrices()">👁 إظهار الأسعار</button>
+    </div>
     <div class="muted" id="count"></div>
+  </div>
+
+  <div class="card" style="border-right:5px solid var(--ok)" id="item-form">
+    <h3>➕ إضافة أو تعديل صنف</h3>
+    <p class="hint">الاسم فقط مطلوب، والباقي اختياري. لو الصنف موجود بيتحدّث، والخانة اللي بتتركها فاضية بتضل زي ما هي.</p>
+    <form method="POST" action="{{ url_for('save_item') }}" id="save-form" autocomplete="off">
+      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
+      <input type="hidden" name="q" class="q-sync" value="{{ q }}">
+      <label>اسم الصنف</label>
+      <input type="text" name="item_name" id="si_name" required maxlength="150" placeholder="اسم الصنف" autocomplete="off">
+      <div class="row3">
+        <div><label>الكمية</label>
+          <input type="number" name="qty" id="si_qty" min="0" placeholder="اختياري" inputmode="numeric" autocomplete="off"></div>
+        <div class="price-field"><label>سعر الشراء</label>
+          <input type="number" step="0.01" min="0" name="buy_price" id="si_buy" placeholder="اختياري" inputmode="decimal" autocomplete="off"></div>
+        <div class="price-field"><label>سعر البيع</label>
+          <input type="number" step="0.01" min="0" name="sell_price" id="si_sell" placeholder="اختياري" inputmode="decimal" autocomplete="off"></div>
+      </div>
+      <button type="submit" class="btn ok full">إضافة / حفظ الصنف</button>
+    </form>
   </div>
 
   <div id="items">
@@ -487,7 +541,7 @@ MAIN_HTML = '''
         <b>{{ it.name }}</b>
         <span class="qty {{ 'zero' if it.qty == 0 else '' }}">{{ it.qty }}{% if it.qty == 0 %} (نفد){% endif %}</span>
       </div>
-      <div class="prices muted">سعر الشراء: <b>{{ it.buy_price | money }}</b> &nbsp;|&nbsp; سعر البيع: <b>{{ it.sell_price | money }}</b></div>
+      <div class="prices muted">سعر الشراء: <b class="pv" data-v="{{ it.buy_price | money }}">••••</b> &nbsp;|&nbsp; سعر البيع: <b class="pv" data-v="{{ it.sell_price | money }}">••••</b></div>
       <div class="actions">
         <form method="POST" action="{{ url_for('sell') }}" class="sell-form">
           <input type="hidden" name="csrf" value="{{ csrf_token() }}">
@@ -511,28 +565,9 @@ MAIN_HTML = '''
       </div>
     </div>
     {% else %}
-    <div class="card muted" style="text-align:center">لا توجد أصناف بعد. أضف أول صنف من النموذج تحت.</div>
+    <div class="card muted" style="text-align:center">لا توجد أصناف بعد. أضف أول صنف من النموذج فوق.</div>
     {% endfor %}
     <div id="no-match" class="card muted" style="display:none; text-align:center">لا يوجد صنف بهذا الاسم.</div>
-  </div>
-
-  <div class="card" style="border-right:5px solid var(--ok)" id="item-form">
-    <h3>➕ إضافة أو تعديل صنف</h3>
-    <form method="POST" action="{{ url_for('save_item') }}">
-      <input type="hidden" name="csrf" value="{{ csrf_token() }}">
-      <input type="hidden" name="q" class="q-sync" value="{{ q }}">
-      <label>اسم الصنف</label>
-      <input type="text" name="item_name" id="si_name" required maxlength="150" placeholder="اسم الصنف">
-      <label>الكمية الكلية</label>
-      <input type="number" name="qty" id="si_qty" required min="0" placeholder="الكمية" inputmode="numeric">
-      <div class="row2">
-        <div><label>سعر الشراء</label>
-          <input type="number" step="0.01" min="0" name="buy_price" id="si_buy" required placeholder="0.00" inputmode="decimal"></div>
-        <div><label>سعر البيع</label>
-          <input type="number" step="0.01" min="0" name="sell_price" id="si_sell" required placeholder="0.00" inputmode="decimal"></div>
-      </div>
-      <button type="submit" class="btn ok full">حفظ الصنف</button>
-    </form>
   </div>
 
   <div class="footer">Inventory management system by Abu Joud</div>
@@ -571,13 +606,33 @@ MAIN_HTML = '''
     document.getElementById('no-match').style.display = (rows.length && !shown) ? '' : 'none';
     document.getElementById('count').textContent = q ? ('تم العثور على ' + shown + ' صنف') : ('عدد الأصناف: ' + rows.length);
   }
+  var pricesShown = false;
+  function renderPrices() {
+    document.body.classList.toggle('show-prices', pricesShown);
+    document.querySelectorAll('.pv').forEach(function (el) {
+      el.textContent = pricesShown ? el.getAttribute('data-v') : '••••';
+    });
+    document.getElementById('eye').textContent = pricesShown ? '🙈 إخفاء الأسعار' : '👁 إظهار الأسعار';
+  }
+  function togglePrices() { pricesShown = !pricesShown; renderPrices(); }
+  // لو خرج من التطبيق أو قفل الشاشة، الأسعار ترجع مخفية
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden && pricesShown) { pricesShown = false; renderPrices(); }
+  });
+  function clearSaveForm() {
+    ['si_name', 'si_qty', 'si_buy', 'si_sell'].forEach(function (id) { document.getElementById(id).value = ''; });
+  }
   function editItem(btn) {
     document.getElementById('si_name').value = btn.getAttribute('data-name');
     document.getElementById('si_qty').value = btn.getAttribute('data-qty');
-    document.getElementById('si_buy').value = btn.getAttribute('data-buy');
-    document.getElementById('si_sell').value = btn.getAttribute('data-sell');
-    document.getElementById('item-form').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // الأسعار تنعبّى بس لو الأسعار ظاهرة، وإلا الخانتين فاضيتين (تضل زي ما هي)
+    document.getElementById('si_buy').value = pricesShown ? btn.getAttribute('data-buy') : '';
+    document.getElementById('si_sell').value = pricesShown ? btn.getAttribute('data-sell') : '';
+    document.getElementById('item-form').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
+  window.addEventListener('pageshow', clearSaveForm);
+  clearSaveForm();
+  renderPrices();
   onSearch();
 </script>
 ''' + SW_REGISTER + '''
@@ -4154,16 +4209,27 @@ def save_item():
     if resp is not None:
         return resp
     name = clean_text(request.form.get('item_name'), 150)
-    qty = parse_int(request.form.get('qty'))
-    buy = parse_decimal(request.form.get('buy_price'))
-    sell = parse_decimal(request.form.get('sell_price'))
+
+    def optional(raw, parser):
+        """(القيمة، صالحة؟). الخانة الفاضية = None وصالحة."""
+        if (raw or '').strip() == '':
+            return None, True
+        value = parser(raw)
+        return value, value is not None
+
+    qty, qty_ok = optional(request.form.get('qty'), parse_int)
+    buy, buy_ok = optional(request.form.get('buy_price'), parse_decimal)
+    sell, sell_ok = optional(request.form.get('sell_price'), parse_decimal)
     if name is None:
         flash_msg('اكتب اسم الصنف (حتى 150 حرف).', ok=False)
-    elif qty is None or buy is None or sell is None:
-        flash_msg('الرجاء إدخال أرقام صحيحة للكمية والأسعار.', ok=False)
+    elif not (qty_ok and buy_ok and sell_ok):
+        flash_msg('الرجاء إدخال أرقام صحيحة للكمية والأسعار (أو اتركها فاضية).', ok=False)
     else:
-        db_upsert_item(name, qty, buy, sell)
-        flash_msg('تم حفظ الصنف (%s) بنجاح!' % name)
+        result = db_upsert_item(name, qty, buy, sell)
+        if result == 'created':
+            flash_msg('تمت إضافة الصنف (%s).' % name)
+        else:
+            flash_msg('تم تحديث الصنف (%s).' % name)
     return back_to_list()
 
 
